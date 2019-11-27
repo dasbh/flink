@@ -20,9 +20,12 @@ package org.apache.flink.python;
 
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.annotation.VisibleForTesting;
-import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.memory.ByteArrayInputStreamWithPos;
 import org.apache.flink.core.memory.ByteArrayOutputStreamWithPos;
+import org.apache.flink.core.memory.DataInputViewStreamWrapper;
+import org.apache.flink.core.memory.DataOutputViewStreamWrapper;
+import org.apache.flink.python.util.ResourceUtil;
 import org.apache.flink.table.functions.python.PythonEnv;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.StringUtils;
@@ -39,19 +42,25 @@ import org.apache.beam.runners.fnexecution.control.RemoteBundle;
 import org.apache.beam.runners.fnexecution.control.StageBundleFactory;
 import org.apache.beam.runners.fnexecution.provisioning.JobInfo;
 import org.apache.beam.runners.fnexecution.state.StateRequestHandler;
-import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.fn.data.FnDataReceiver;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.options.PortablePipelineOptions;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.vendor.grpc.v1p21p0.com.google.protobuf.Struct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Random;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * An base class for {@link PythonFunctionRunner}.
@@ -61,6 +70,9 @@ import java.util.Random;
  */
 @Internal
 public abstract class AbstractPythonFunctionRunner<IN, OUT> implements PythonFunctionRunner<IN> {
+
+	/** The logger used by the runner class and its subclasses. */
+	protected static final Logger LOG = LoggerFactory.getLogger(AbstractPythonFunctionRunner.class);
 
 	private static final String MAIN_INPUT_ID = "input";
 
@@ -122,14 +134,14 @@ public abstract class AbstractPythonFunctionRunner<IN, OUT> implements PythonFun
 	private transient FnDataReceiver<WindowedValue<?>> mainInputReceiver;
 
 	/**
-	 * The coder for input elements.
+	 * The TypeSerializer for input elements.
 	 */
-	private transient Coder<IN> inputCoder;
+	private transient TypeSerializer<IN> inputTypeSerializer;
 
 	/**
-	 * The coder for execution results.
+	 * The TypeSerializer for execution results.
 	 */
-	private transient Coder<OUT> outputCoder;
+	private transient TypeSerializer<OUT> outputTypeSerializer;
 
 	/**
 	 * Reusable InputStream used to holding the execution results to be deserialized.
@@ -137,9 +149,25 @@ public abstract class AbstractPythonFunctionRunner<IN, OUT> implements PythonFun
 	private transient ByteArrayInputStreamWithPos bais;
 
 	/**
+	 * InputStream Wrapper.
+	 */
+	private transient DataInputViewStreamWrapper baisWrapper;
+
+	/**
 	 * Reusable OutputStream used to holding the serialized input elements.
 	 */
 	private transient ByteArrayOutputStreamWithPos baos;
+
+	/**
+	 * OutputStream Wrapper.
+	 */
+	private transient DataOutputViewStreamWrapper baosWrapper;
+
+	/**
+	 * Python libraries and shell script extracted from resource of flink-python jar.
+	 * They are used to support running python udf worker in process mode.
+	 */
+	private transient List<File> pythonInternalLibs;
 
 	public AbstractPythonFunctionRunner(
 		String taskName,
@@ -157,9 +185,11 @@ public abstract class AbstractPythonFunctionRunner<IN, OUT> implements PythonFun
 	@Override
 	public void open() throws Exception {
 		bais = new ByteArrayInputStreamWithPos();
+		baisWrapper = new DataInputViewStreamWrapper(bais);
 		baos = new ByteArrayOutputStreamWithPos();
-		inputCoder = getInputCoder();
-		outputCoder = getOutputCoder();
+		baosWrapper = new DataOutputViewStreamWrapper(baos);
+		inputTypeSerializer = getInputTypeSerializer();
+		outputTypeSerializer = getOutputTypeSerializer();
 
 		PortablePipelineOptions portableOptions =
 			PipelineOptionsFactory.as(PortablePipelineOptions.class);
@@ -183,6 +213,14 @@ public abstract class AbstractPythonFunctionRunner<IN, OUT> implements PythonFun
 		}
 
 		try {
+			if (pythonInternalLibs != null) {
+				pythonInternalLibs.forEach(File::delete);
+			}
+		} finally {
+			pythonInternalLibs = null;
+		}
+
+		try {
 			if (jobBundleFactory != null) {
 				jobBundleFactory.close();
 			}
@@ -202,7 +240,7 @@ public abstract class AbstractPythonFunctionRunner<IN, OUT> implements PythonFun
 				public FnDataReceiver<WindowedValue<byte[]>> create(String pCollectionId) {
 					return input -> {
 						bais.setBuffer(input.getValue(), 0, input.getValue().length);
-						resultReceiver.accept(outputCoder.decode(bais));
+						resultReceiver.accept(outputTypeSerializer.deserialize(baisWrapper));
 					};
 				}
 			};
@@ -233,7 +271,7 @@ public abstract class AbstractPythonFunctionRunner<IN, OUT> implements PythonFun
 	public void processElement(IN element) {
 		try {
 			baos.reset();
-			inputCoder.encode(element, baos);
+			inputTypeSerializer.serialize(element, baosWrapper);
 			// TODO: support to use ValueOnlyWindowedValueCoder for better performance.
 			// Currently, FullWindowedValueCoder has to be used in Beam's portability framework.
 			mainInputReceiver.accept(WindowedValue.valueInGlobalWindow(baos.toByteArray()));
@@ -279,15 +317,35 @@ public abstract class AbstractPythonFunctionRunner<IN, OUT> implements PythonFun
 	 */
 	protected RunnerApi.Environment createPythonExecutionEnvironment() {
 		if (pythonEnv.getExecType() == PythonEnv.ExecType.PROCESS) {
-			String flinkHomePath = System.getenv(ConfigConstants.ENV_FLINK_HOME_DIR);
-			String pythonWorkerCommand =
-				flinkHomePath + File.separator + "bin" + File.separator + "pyflink-udf-runner.sh";
-
+			Random rnd = new Random();
+			String tmpdir = tempDirs[rnd.nextInt(tempDirs.length)];
+			String prefix = UUID.randomUUID().toString() + "_";
+			try {
+				pythonInternalLibs = ResourceUtil.extractBasicDependenciesFromResource(
+					tmpdir,
+					prefix,
+					false);
+			} catch (IOException | InterruptedException e) {
+				throw new RuntimeException(e);
+			}
+			String pythonWorkerCommand = null;
+			for (File file: pythonInternalLibs) {
+				file.deleteOnExit();
+				if (file.getName().endsWith("pyflink-udf-runner.sh")) {
+					pythonWorkerCommand = file.getAbsolutePath();
+					pythonInternalLibs.remove(file);
+					break;
+				}
+			}
+			// TODO: provide taskmanager log directory here
+			Map<String, String> env = appendEnvironmentVariable(
+				System.getenv(),
+				pythonInternalLibs.stream().map(File::getAbsolutePath).collect(Collectors.toList()));
 			return Environments.createProcessEnvironment(
 				"",
 				"",
 				pythonWorkerCommand,
-				null);
+				env);
 		} else {
 			throw new UnsupportedOperationException(String.format(
 				"Execution type '%s' is not supported.", pythonEnv.getExecType()));
@@ -302,12 +360,39 @@ public abstract class AbstractPythonFunctionRunner<IN, OUT> implements PythonFun
 	public abstract ExecutableStage createExecutableStage();
 
 	/**
-	 * Returns the coder for input elements.
+	 * Returns the TypeSerializer for input elements.
 	 */
-	public abstract Coder<IN> getInputCoder();
+	public abstract TypeSerializer<IN> getInputTypeSerializer();
 
 	/**
-	 * Returns the coder for execution results.
+	 * Returns the TypeSerializer for execution results.
 	 */
-	public abstract Coder<OUT> getOutputCoder();
+	public abstract TypeSerializer<OUT> getOutputTypeSerializer();
+
+	private static Map<String, String> appendEnvironmentVariable(
+			Map<String, String> systemEnv,
+			List<String> pythonDependencies) {
+		String logDir = null;
+		if (System.getProperty("log.file") != null) {
+			try {
+				logDir = new File(System.getProperty("log.file")).getParentFile().getAbsolutePath();
+			} catch (NullPointerException | SecurityException e) {
+				// the opertion may throw NPE and SecurityException.
+				LOG.warn("Can not get the log directory from property log.file.", e);
+			}
+		}
+
+		Map<String, String> result = new HashMap<>(systemEnv);
+		String pythonPath = String.join(File.pathSeparator, pythonDependencies);
+		if (systemEnv.get("PYTHONPATH") != null) {
+			pythonPath = String.join(File.pathSeparator, pythonPath, systemEnv.get("PYTHONPATH"));
+		}
+		result.put("PYTHONPATH", pythonPath);
+
+		if (logDir != null) {
+			result.put("FLINK_LOG_DIR", logDir);
+		}
+
+		return result;
+	}
 }

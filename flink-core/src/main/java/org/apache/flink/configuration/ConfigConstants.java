@@ -274,15 +274,6 @@ public final class ConfigConstants {
 	public static final String TASK_MANAGER_MEMORY_OFF_HEAP_KEY = "taskmanager.memory.off-heap";
 
 	/**
-	 * The config parameter for specifying whether TaskManager managed memory should be preallocated
-	 * when the TaskManager is starting. (default is false)
-	 *
-	 * @deprecated Use {@link TaskManagerOptions#MANAGED_MEMORY_PRE_ALLOCATE} instead
-	 */
-	@Deprecated
-	public static final String TASK_MANAGER_MEMORY_PRE_ALLOCATE_KEY = "taskmanager.memory.preallocate";
-
-	/**
 	 * The config parameter defining the number of buffers used in the network stack. This defines the
 	 * number of possible tasks and shuffles.
 	 *
@@ -822,7 +813,7 @@ public final class ConfigConstants {
 	public static final String JOB_MANAGER_WEB_BACK_PRESSURE_REFRESH_INTERVAL = "jobmanager.web.backpressure.refresh-interval";
 
 	/**
-	 * Number of stack trace samples to take to determine back pressure.
+	 * Number of samples to take to determine back pressure.
 	 *
 	 * @deprecated Use {@link WebOptions#BACKPRESSURE_NUM_SAMPLES} instead.
 	 */
@@ -830,7 +821,7 @@ public final class ConfigConstants {
 	public static final String JOB_MANAGER_WEB_BACK_PRESSURE_NUM_SAMPLES = "jobmanager.web.backpressure.num-samples";
 
 	/**
-	 * Delay between stack trace samples to determine back pressure.
+	 * Delay between samples to determine back pressure.
 	 *
 	 * @deprecated Use {@link WebOptions#BACKPRESSURE_DELAY} instead.
 	 */
@@ -1502,14 +1493,6 @@ public final class ConfigConstants {
 	@Deprecated
 	public static final String DEFAULT_TASK_MANAGER_REFUSED_REGISTRATION_PAUSE = "10 s";
 
-	/**
-	 * Config key has been deprecated. Therefore, no default value required.
-	 *
-	 * @deprecated {@link TaskManagerOptions#MANAGED_MEMORY_PRE_ALLOCATE} provides the default value now
-	 */
-	@Deprecated
-	public static final boolean DEFAULT_TASK_MANAGER_MEMORY_PRE_ALLOCATE = false;
-
 	/** @deprecated Please use {@link TaskManagerOptions#TASK_CANCELLATION_INTERVAL}. */
 	@Deprecated
 	public static final long DEFAULT_TASK_CANCELLATION_INTERVAL_MILLIS = 30000;
@@ -2029,11 +2012,17 @@ public final class ConfigConstants {
 	/** The environment variable name which contains the location of the plugins folder. */
 	public static final String ENV_FLINK_PLUGINS_DIR = "FLINK_PLUGINS_DIR";
 
+	/** The default Flink plugins directory if none has been specified via {@link #ENV_FLINK_PLUGINS_DIR}. */
+	public static final String DEFAULT_FLINK_PLUGINS_DIRS = "plugins";
+
 	/** The environment variable name which contains the location of the bin directory. */
 	public static final String ENV_FLINK_BIN_DIR = "FLINK_BIN_DIR";
 
 	/** The environment variable name which contains the Flink installation root directory. */
 	public static final String ENV_FLINK_HOME_DIR = "FLINK_HOME";
+
+	/** The user lib directory name. */
+	public static final String DEFAULT_FLINK_USR_LIB_DIR = "usrlib";
 
 	// ---------------------------- Encoding ------------------------------
 

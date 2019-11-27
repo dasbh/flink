@@ -35,8 +35,6 @@ import static org.apache.flink.configuration.description.TextElement.text;
 @ConfigGroups(groups = @ConfigGroup(name = "TaskManagerMemory", keyPrefix = "taskmanager.memory"))
 public class TaskManagerOptions {
 
-	private static final String MANAGED_MEMORY_PRE_ALLOCATE_KEY = "taskmanager.memory.preallocate";
-
 	// ------------------------------------------------------------------------
 	//  General TaskManager Options
 	// ------------------------------------------------------------------------
@@ -78,6 +76,7 @@ public class TaskManagerOptions {
 	 * shuts down the actor system if it detects that it has quarantined another actor system
 	 * or if it has been quarantined by another actor system.
 	 */
+	@Deprecated
 	public static final ConfigOption<Boolean> EXIT_ON_FATAL_AKKA_ERROR =
 			key("taskmanager.exit-on-fatal-akka-error")
 			.defaultValue(false)
@@ -226,27 +225,9 @@ public class TaskManagerOptions {
 	public static final ConfigOption<Boolean> MEMORY_OFF_HEAP =
 			key("taskmanager.memory.off-heap")
 			.defaultValue(false)
-				.withDescription(Description.builder()
-					.text("Memory allocation method (JVM heap or off-heap), used for managed memory of the" +
+				.withDescription("Memory allocation method (JVM heap or off-heap), used for managed memory of the" +
 						" TaskManager. For setups with larger quantities of memory, this can" +
-						" improve the efficiency of the operations performed on the memory.")
-					.linebreak()
-					.text("When set to true, then it is advised that %s is also set to true.", code(MANAGED_MEMORY_PRE_ALLOCATE_KEY))
-					.build());
-
-	/**
-	 * Whether TaskManager managed memory should be pre-allocated when the TaskManager is starting.
-	 */
-	public static final ConfigOption<Boolean> MANAGED_MEMORY_PRE_ALLOCATE =
-			key(MANAGED_MEMORY_PRE_ALLOCATE_KEY)
-			.defaultValue(false)
-			.withDescription(Description.builder()
-				.text("Whether TaskManager managed memory should be pre-allocated when the TaskManager is starting." +
-					" When %s is set to true, then it is advised that this configuration is also" +
-					" set to true. If this configuration is set to false cleaning up of the allocated off-heap memory" +
-					" happens only when the configured JVM parameter MaxDirectMemorySize is reached by triggering a full" +
-					" GC. For streaming setups, it is highly recommended to set this value to false as the core state" +
-					" backends currently do not use the managed memory.", code(MEMORY_OFF_HEAP.key())).build());
+						" improve the efficiency of the operations performed on the memory.");
 
 	/**
 	 * The config parameter for automatically defining the TaskManager's binding address,
@@ -297,6 +278,16 @@ public class TaskManagerOptions {
 			.defaultValue("128m")
 			.withDescription("Framework Heap Memory size for TaskExecutors. This is the size of JVM heap memory reserved"
 				+ " for TaskExecutor framework, which will not be allocated to task slots.");
+
+	/**
+	 * Framework Off-Heap Memory size for TaskExecutors.
+	 */
+	public static final ConfigOption<String> FRAMEWORK_OFF_HEAP_MEMORY =
+		key("taskmanager.memory.framework.off-heap.size")
+			.defaultValue("64m")
+			.withDescription("Framework Off-Heap Memory size for TaskExecutors. This is the size of off-heap memory"
+				+ " (JVM direct memory or native memory) reserved for TaskExecutor framework, which will not be"
+				+ " allocated to task slots. It will be accounted as part of the JVM max direct memory size limit.");
 
 	/**
 	 * Task Heap Memory size for TaskExecutors.

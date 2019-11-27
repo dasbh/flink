@@ -85,9 +85,7 @@ import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.metastore.api.UnknownDBException;
 import org.apache.hadoop.hive.ql.io.StorageFormatDescriptor;
 import org.apache.hadoop.hive.ql.io.StorageFormatFactory;
-import org.apache.hadoop.hive.serde2.SerDeException;
 import org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe;
-import org.apache.hive.common.util.HiveStringUtils;
 import org.apache.thrift.TException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -101,6 +99,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.table.catalog.config.CatalogConfig.FLINK_PROPERTY_PREFIX;
@@ -206,7 +205,7 @@ public class HiveCatalog extends AbstractCatalog {
 
 	@Override
 	public Optional<FunctionDefinitionFactory> getFunctionDefinitionFactory() {
-		return Optional.of(new HiveFunctionDefinitionFactory(hiveConf));
+		return Optional.of(new HiveFunctionDefinitionFactory(hiveShim));
 	}
 
 	// ------ databases ------
@@ -525,15 +524,11 @@ public class HiveCatalog extends AbstractCatalog {
 			fields = hiveTable.getSd().getCols();
 		} else {
 			// get schema from deserializer
-			try {
-				fields = HiveReflectionUtils.getFieldsFromDeserializer(hiveShim, hiveTable.getTableName(),
-						HiveReflectionUtils.getDeserializer(hiveShim, hiveConf, hiveTable, true));
-			} catch (SerDeException | MetaException e) {
-				throw new CatalogException("Failed to get Hive table schema from deserializer", e);
-			}
+			fields = hiveShim.getFieldsFromDeserializer(hiveConf, hiveTable, true);
 		}
+		Set<String> notNullColumns = client.getNotNullColumns(hiveConf, hiveTable.getDbName(), hiveTable.getTableName());
 		TableSchema tableSchema =
-			HiveTableUtil.createTableSchema(fields, hiveTable.getPartitionKeys());
+			HiveTableUtil.createTableSchema(fields, hiveTable.getPartitionKeys(), notNullColumns);
 
 		// Partition keys
 		List<String> partitionKeys = new ArrayList<>();
@@ -975,8 +970,8 @@ public class HiveCatalog extends AbstractCatalog {
 
 		try {
 			CatalogFunction existingFunction = getFunction(functionPath);
-			boolean existingType = Boolean.valueOf(existingFunction.getProperties().get(CatalogConfig.IS_GENERIC));
-			boolean newType = Boolean.valueOf(newFunction.getProperties().get(CatalogConfig.IS_GENERIC));
+			boolean existingType = existingFunction.isGeneric();
+			boolean newType = newFunction.isGeneric();
 			if (existingType != newType) {
 				throw new CatalogException(
 					String.format("Function types don't match. Existing function %s generic, and new function %s generic.",
@@ -1050,20 +1045,9 @@ public class HiveCatalog extends AbstractCatalog {
 			Function function = client.getFunction(functionPath.getDatabaseName(), functionPath.getObjectName());
 
 			if (function.getClassName().startsWith(FLINK_FUNCTION_PREFIX)) {
-
-				return new CatalogFunctionImpl(
-					function.getClassName().substring(FLINK_FUNCTION_PREFIX.length()),
-					new HashMap<String, String>() {{
-						put(CatalogConfig.IS_GENERIC, String.valueOf(true));
-					}}
-				);
+				return new CatalogFunctionImpl(function.getClassName().substring(FLINK_FUNCTION_PREFIX.length()));
 			} else {
-				return new CatalogFunctionImpl(
-					function.getClassName(),
-					new HashMap<String, String>() {{
-						put(CatalogConfig.IS_GENERIC, String.valueOf(false));
-					}}
-				);
+				return new CatalogFunctionImpl(function.getClassName());
 			}
 		} catch (NoSuchObjectException e) {
 			throw new FunctionNotExistException(getName(), functionPath, e);
@@ -1089,7 +1073,7 @@ public class HiveCatalog extends AbstractCatalog {
 
 	private static Function instantiateHiveFunction(ObjectPath functionPath, CatalogFunction function) {
 
-		boolean isGeneric = Boolean.valueOf(function.getProperties().get(CatalogConfig.IS_GENERIC));
+		boolean isGeneric = function.isGeneric();
 
 		// Hive Function does not have properties map
 		// thus, use a prefix in class name to distinguish Flink and Hive functions
@@ -1099,7 +1083,7 @@ public class HiveCatalog extends AbstractCatalog {
 
 		return new Function(
 			// due to https://issues.apache.org/jira/browse/HIVE-22053, we have to normalize function name ourselves
-			HiveStringUtils.normalizeIdentifier(functionPath.getObjectName()),
+			functionPath.getObjectName().trim().toLowerCase(),
 			functionPath.getDatabaseName(),
 			functionClassName,
 			null,			// Owner name
@@ -1120,6 +1104,10 @@ public class HiveCatalog extends AbstractCatalog {
 	public void alterTableStatistics(ObjectPath tablePath, CatalogTableStatistics tableStatistics, boolean ignoreIfNotExists) throws TableNotExistException, CatalogException {
 		try {
 			Table hiveTable = getHiveTable(tablePath);
+			// the stats we put in table parameters will be overridden by HMS in older Hive versions, so error out
+			if (!isTablePartitioned(hiveTable) && hiveVersion.compareTo("1.2.1") < 0) {
+				throw new CatalogException("Alter table stats is not supported in Hive version " + hiveVersion);
+			}
 			// Set table stats
 			if (compareAndUpdateStatisticsProperties(tableStatistics, hiveTable.getParameters())) {
 				client.alter_table(tablePath.getDatabaseName(), tablePath.getObjectName(), hiveTable);
@@ -1139,7 +1127,7 @@ public class HiveCatalog extends AbstractCatalog {
 			Table hiveTable = getHiveTable(tablePath);
 			// Set table column stats. This only works for non-partitioned tables.
 			if (!isTablePartitioned(hiveTable)) {
-				client.updateTableColumnStatistics(HiveStatsUtil.createTableColumnStats(hiveTable, columnStatistics.getColumnStatisticsData()));
+				client.updateTableColumnStatistics(HiveStatsUtil.createTableColumnStats(hiveTable, columnStatistics.getColumnStatisticsData(), hiveVersion));
 			} else {
 				throw new TablePartitionedException(getName(), tablePath);
 			}
@@ -1204,7 +1192,8 @@ public class HiveCatalog extends AbstractCatalog {
 			Partition hivePartition = getHivePartition(tablePath, partitionSpec);
 			Table hiveTable = getHiveTable(tablePath);
 			String partName = getPartitionName(tablePath, partitionSpec, hiveTable);
-			client.updatePartitionColumnStatistics(HiveStatsUtil.createPartitionColumnStats(hivePartition, partName, columnStatistics.getColumnStatisticsData()));
+			client.updatePartitionColumnStatistics(HiveStatsUtil.createPartitionColumnStats(
+					hivePartition, partName, columnStatistics.getColumnStatisticsData(), hiveVersion));
 		} catch (TableNotExistException | PartitionSpecInvalidException e) {
 			if (!ignoreIfNotExists) {
 				throw new PartitionNotExistException(getName(), tablePath, partitionSpec, e);
@@ -1243,7 +1232,7 @@ public class HiveCatalog extends AbstractCatalog {
 			if (!isTablePartitioned(hiveTable)) {
 				List<ColumnStatisticsObj> columnStatisticsObjs = client.getTableColumnStatistics(
 						hiveTable.getDbName(), hiveTable.getTableName(), getFieldNames(hiveTable.getSd().getCols()));
-				return new CatalogColumnStatistics(HiveStatsUtil.createCatalogColumnStats(columnStatisticsObjs));
+				return new CatalogColumnStatistics(HiveStatsUtil.createCatalogColumnStats(columnStatisticsObjs, hiveVersion));
 			} else {
 				// TableColumnStats of partitioned table is unknown, the behavior is same as HIVE
 				return CatalogColumnStatistics.UNKNOWN;
@@ -1280,7 +1269,7 @@ public class HiveCatalog extends AbstractCatalog {
 														getFieldNames(partition.getSd().getCols()));
 			List<ColumnStatisticsObj> columnStatisticsObjs = partitionColumnStatistics.get(partName);
 			if (columnStatisticsObjs != null && !columnStatisticsObjs.isEmpty()) {
-				return new CatalogColumnStatistics(HiveStatsUtil.createCatalogColumnStats(columnStatisticsObjs));
+				return new CatalogColumnStatistics(HiveStatsUtil.createCatalogColumnStats(columnStatisticsObjs, hiveVersion));
 			} else {
 				return CatalogColumnStatistics.UNKNOWN;
 			}

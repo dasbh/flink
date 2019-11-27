@@ -36,6 +36,7 @@ import org.apache.flink.table.planner.functions.utils.UserDefinedFunctionUtils.{
 import org.apache.flink.table.planner.plan.nodes.FlinkRelNode
 import org.apache.flink.table.planner.plan.utils.LookupJoinUtil._
 import org.apache.flink.table.planner.plan.utils.{JoinTypeUtil, RelExplainUtil}
+import org.apache.flink.table.planner.plan.utils.PythonUtil.containsPythonCall
 import org.apache.flink.table.planner.plan.utils.RelExplainUtil.preferExpressionFormat
 import org.apache.flink.table.planner.utils.TableConfigUtils.getMillisecondFromConfigDuration
 import org.apache.flink.table.runtime.operators.join.lookup.{AsyncLookupJoinRunner, AsyncLookupJoinWithCalcRunner, LookupJoinRunner, LookupJoinWithCalcRunner}
@@ -45,7 +46,7 @@ import org.apache.flink.table.runtime.types.LogicalTypeDataTypeConverter.fromDat
 import org.apache.flink.table.runtime.types.PlannerTypeUtils.isInteroperable
 import org.apache.flink.table.runtime.typeutils.BaseRowTypeInfo
 import org.apache.flink.table.sources.{LookupableTableSource, TableSource}
-import org.apache.flink.table.types.logical.{LogicalType, RowType, TypeInformationAnyType}
+import org.apache.flink.table.types.logical.{LogicalType, RowType, TypeInformationRawType}
 import org.apache.flink.table.types.utils.TypeConversions.fromDataTypeToLegacyInfo
 import org.apache.flink.types.Row
 
@@ -93,6 +94,12 @@ abstract class CommonLookupJoin(
     joinKeyPairs,
     tableSource.getTableSchema,
     calcOnTemporalTable)
+
+  if (containsPythonCall(joinInfo.getRemaining(cluster.getRexBuilder))) {
+    throw new TableException("Only inner join condition with equality predicates supports the " +
+      "Python UDF taking the inputs from the left table and the right table at the same time, " +
+      "e.g., ON T1.id = T2.id && pythonUdf(T1.a, T2.b)")
+  }
 
   override def deriveRowType(): RelDataType = {
     val flinkTypeFactory = cluster.getTypeFactory.asInstanceOf[FlinkTypeFactory]
@@ -208,7 +215,7 @@ abstract class CommonLookupJoin(
         producedTypeInfo,
         udtfResultType,
         extractedResultTypeInfo)
-      val futureType = new TypeInformationAnyType(
+      val futureType = new TypeInformationRawType(
         new GenericTypeInfo(classOf[CompletableFuture[_]]))
       val parameters = Array(futureType) ++ lookupFieldTypesInOrder
       checkEvalMethodSignature(
@@ -368,7 +375,7 @@ abstract class CommonLookupJoin(
     } else {
       expectedTypes.map {
         // special case for generic type
-        case gt: TypeInformationAnyType[_] => gt.getTypeInformation.getTypeClass
+        case gt: TypeInformationRawType[_] => gt.getTypeInformation.getTypeClass
         case t@_ => getInternalClassForType(t)
       }
     }
