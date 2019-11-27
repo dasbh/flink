@@ -18,9 +18,7 @@ jobs:
       uses: actions/setup-java@v1
       with:
         java-version: 1.8
-    - name: Install Maven
-      run: source ./tools/travis/setup_maven.sh
     - name: Build with Maven
       env: 
         PROFILE: "-Dhadoop.version=2.8.3 -Dinclude_hadoop_aws -Dscala-2.12 -Phive-1.2.1"
-      run: ./tools/travis_controller.sh compile
+      run: source ./tools/travis/setup_maven.sh && ./tools/travis_controller.sh compile
