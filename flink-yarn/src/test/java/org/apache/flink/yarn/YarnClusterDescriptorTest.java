@@ -66,6 +66,7 @@ import static org.junit.Assert.fail;
  */
 public class YarnClusterDescriptorTest extends TestLogger {
 
+	private static final int YARN_MAX_VCORES = 16;
 	private static YarnConfiguration yarnConfiguration;
 
 	private static YarnClient yarnClient;
@@ -104,9 +105,6 @@ public class YarnClusterDescriptorTest extends TestLogger {
 		clusterDescriptor.setLocalJarPath(new Path(flinkJar.getPath()));
 
 		ClusterSpecification clusterSpecification = new ClusterSpecification.ClusterSpecificationBuilder()
-			.setMasterMemoryMB(1)
-			.setTaskManagerMemoryMB(1)
-			.setNumberTaskManagers(1)
 			.setSlotsPerTaskManager(Integer.MAX_VALUE)
 			.createClusterSpecification();
 
@@ -137,10 +135,6 @@ public class YarnClusterDescriptorTest extends TestLogger {
 
 		// configure slots
 		ClusterSpecification clusterSpecification = new ClusterSpecification.ClusterSpecificationBuilder()
-			.setMasterMemoryMB(1)
-			.setTaskManagerMemoryMB(1)
-			.setNumberTaskManagers(1)
-			.setSlotsPerTaskManager(1)
 			.createClusterSpecification();
 
 		try {
@@ -175,7 +169,6 @@ public class YarnClusterDescriptorTest extends TestLogger {
 		final String log4j =
 			"-Dlog4j.configuration=file:" + FlinkYarnSessionCli.CONFIG_FILE_LOG4J_NAME; // if set
 		final String mainClass = clusterDescriptor.getYarnSessionClusterEntrypoint();
-		final String args = "";
 		final String redirects =
 			"1> " + ApplicationConstants.LOG_DIR_EXPANSION_VAR + "/jobmanager.out " +
 			"2> " + ApplicationConstants.LOG_DIR_EXPANSION_VAR + "/jobmanager.err";
@@ -185,9 +178,9 @@ public class YarnClusterDescriptorTest extends TestLogger {
 			// no logging, with/out krb5
 			assertEquals(
 				java + " " + jvmmem +
-					" " + // jvmOpts
-					" " + // logging
-					" " + mainClass + " " + args + " " + redirects,
+					"" + // jvmOpts
+					"" + // logging
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -199,9 +192,9 @@ public class YarnClusterDescriptorTest extends TestLogger {
 
 			assertEquals(
 				java + " " + jvmmem +
-					" " + " " + krb5 + // jvmOpts
-					" " + // logging
-					" " + mainClass + " " + args + " " + redirects,
+					" " + krb5 + // jvmOpts
+					"" + // logging
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -214,9 +207,9 @@ public class YarnClusterDescriptorTest extends TestLogger {
 			// logback only, with/out krb5
 			assertEquals(
 				java + " " + jvmmem +
-					" " + // jvmOpts
+					"" + // jvmOpts
 					" " + logfile + " " + logback +
-					" " + mainClass + " " + args + " " + redirects,
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -228,9 +221,9 @@ public class YarnClusterDescriptorTest extends TestLogger {
 
 			assertEquals(
 				java + " " + jvmmem +
-					" " + " " + krb5 + // jvmOpts
+					" " + krb5 + // jvmOpts
 					" " + logfile + " " + logback +
-					" " + mainClass + " " + args + " " + redirects,
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -243,9 +236,9 @@ public class YarnClusterDescriptorTest extends TestLogger {
 			// log4j, with/out krb5
 			assertEquals(
 				java + " " + jvmmem +
-					" " + // jvmOpts
+					"" + // jvmOpts
 					" " + logfile + " " + log4j +
-					" " + mainClass + " " + args + " " + redirects,
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -257,9 +250,9 @@ public class YarnClusterDescriptorTest extends TestLogger {
 
 			assertEquals(
 				java + " " + jvmmem +
-					" " + " " + krb5 + // jvmOpts
+					" " + krb5 + // jvmOpts
 					" " + logfile + " " + log4j +
-					" " + mainClass + " " + args + " " + redirects,
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -272,9 +265,9 @@ public class YarnClusterDescriptorTest extends TestLogger {
 			// logback + log4j, with/out krb5
 			assertEquals(
 				java + " " + jvmmem +
-					" " + // jvmOpts
+					"" + // jvmOpts
 					" " + logfile + " " + logback + " " + log4j +
-					" " + mainClass + " " + args + " " + redirects,
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -286,9 +279,9 @@ public class YarnClusterDescriptorTest extends TestLogger {
 
 			assertEquals(
 				java + " " + jvmmem +
-					" " + " " + krb5 + // jvmOpts
+					" " + krb5 + // jvmOpts
 					" " + logfile + " " + logback + " " + log4j +
-					" " + mainClass + " " + args + " " + redirects,
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -306,7 +299,7 @@ public class YarnClusterDescriptorTest extends TestLogger {
 				java + " " + jvmmem +
 					" " + jvmOpts +
 					" " + logfile + " " + logback + " " + log4j +
-					" " + mainClass + " " + args + " " + redirects,
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -320,7 +313,7 @@ public class YarnClusterDescriptorTest extends TestLogger {
 				java + " " + jvmmem +
 					" " + jvmOpts + " " + krb5 + // jvmOpts
 					" " + logfile + " " + logback + " " + log4j +
-					" " + mainClass + " " + args + " " + redirects,
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -337,7 +330,7 @@ public class YarnClusterDescriptorTest extends TestLogger {
 				java + " " + jvmmem +
 					" " + jvmOpts + " " + jmJvmOpts +
 					" " + logfile + " " + logback + " " + log4j +
-					" " + mainClass + " " + args + " " + redirects,
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -351,7 +344,7 @@ public class YarnClusterDescriptorTest extends TestLogger {
 				java + " " + jvmmem +
 					" " + jvmOpts + " " + jmJvmOpts + " " + krb5 + // jvmOpts
 					" " + logfile + " " + logback + " " + log4j +
-					" " + mainClass + " " + args + " " + redirects,
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -369,7 +362,7 @@ public class YarnClusterDescriptorTest extends TestLogger {
 				java + " 1 " + jvmmem +
 					" 2 " + jvmOpts + " " + jmJvmOpts + " " + krb5 + // jvmOpts
 					" 3 " + logfile + " " + logback + " " + log4j +
-					" 4 " + mainClass + " 5 " + args + " 6 " + redirects,
+					" 4 " + mainClass + " 5 6 " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -387,7 +380,7 @@ public class YarnClusterDescriptorTest extends TestLogger {
 					" " + logfile + " " + logback + " " + log4j +
 					" " + jvmOpts + " " + jmJvmOpts + " " + krb5 + // jvmOpts
 					" " + jvmmem +
-					" " + mainClass + " " + args + " " + redirects,
+					" " + mainClass + " " + redirects,
 				clusterDescriptor
 					.setupApplicationMasterContainer(
 						mainClass,
@@ -543,11 +536,13 @@ public class YarnClusterDescriptorTest extends TestLogger {
 	}
 
 	private YarnClusterDescriptor createYarnClusterDescriptor(Configuration configuration) {
-		return YarnTestUtils.createClusterDescriptorWithLogging(
-				temporaryFolder.getRoot().getAbsolutePath(),
-				configuration,
-				yarnConfiguration,
-				yarnClient,
-				true);
+		YarnTestUtils.configureLogFile(configuration, temporaryFolder.getRoot().getAbsolutePath());
+
+		return YarnClusterDescriptorBuilder.newBuilder(yarnClient, true)
+			.setFlinkConfiguration(configuration)
+			.setYarnConfiguration(yarnConfiguration)
+			.setYarnClusterInformationRetriever(() -> YARN_MAX_VCORES)
+			.build();
+
 	}
 }

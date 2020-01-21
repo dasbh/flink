@@ -68,9 +68,11 @@ public class ConfigOptionsDocGenerator {
 		new OptionsClassLocation("flink-mesos", "org.apache.flink.mesos.configuration"),
 		new OptionsClassLocation("flink-mesos", "org.apache.flink.mesos.runtime.clusterframework"),
 		new OptionsClassLocation("flink-metrics/flink-metrics-prometheus", "org.apache.flink.metrics.prometheus"),
+		new OptionsClassLocation("flink-metrics/flink-metrics-influxdb", "org.apache.flink.metrics.influxdb"),
 		new OptionsClassLocation("flink-state-backends/flink-statebackend-rocksdb", "org.apache.flink.contrib.streaming.state"),
 		new OptionsClassLocation("flink-table/flink-table-api-java", "org.apache.flink.table.api.config"),
-		new OptionsClassLocation("flink-python", "org.apache.flink.python")
+		new OptionsClassLocation("flink-python", "org.apache.flink.python"),
+		new OptionsClassLocation("flink-kubernetes", "org.apache.flink.kubernetes.configuration")
 	};
 
 	static final Set<String> EXCLUSIONS = new HashSet<>(Arrays.asList(
@@ -78,7 +80,8 @@ public class ConfigOptionsDocGenerator {
 		"org.apache.flink.configuration.WritableConfig",
 		"org.apache.flink.configuration.ConfigOptions",
 		"org.apache.flink.streaming.api.environment.CheckpointConfig",
-		"org.apache.flink.contrib.streaming.state.PredefinedOptions"));
+		"org.apache.flink.contrib.streaming.state.PredefinedOptions",
+		"org.apache.flink.python.PythonConfig"));
 
 	static final String DEFAULT_PATH_PREFIX = "src/main/java";
 
@@ -385,7 +388,7 @@ public class ConfigOptionsDocGenerator {
 			}
 			return "\"" + value + "\"";
 		} else if (value instanceof Duration) {
-			return TimeUtils.getStringInMillis((Duration) value);
+			return TimeUtils.formatWithHighestUnit((Duration) value);
 		} else if (value instanceof List) {
 			return ((List<Object>) value).stream()
 				.map(ConfigOptionsDocGenerator::stringifyObject)

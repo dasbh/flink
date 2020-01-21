@@ -29,8 +29,6 @@ import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.Nullable;
-
 import java.io.IOException;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -66,7 +64,7 @@ public class CheckpointedInputGate implements PullingAsyncDataInput<BufferOrEven
 			InputGate inputGate,
 			BufferStorage bufferStorage,
 			String taskName,
-			@Nullable AbstractInvokable toNotifyOnCheckpoint) {
+			AbstractInvokable toNotifyOnCheckpoint) {
 		this(
 			inputGate,
 			bufferStorage,
@@ -125,7 +123,6 @@ public class CheckpointedInputGate implements PullingAsyncDataInput<BufferOrEven
 				next = inputGate.pollNext();
 			}
 			else {
-				// TODO: FLINK-12536 for non credit-based flow control, getNext method is blocking
 				next = bufferStorage.pollNext();
 				if (!next.isPresent()) {
 					return pollNext();

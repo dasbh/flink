@@ -20,14 +20,15 @@ package org.apache.flink.table.planner.calcite
 
 import org.apache.flink.api.common.typeinfo.{NothingTypeInfo, TypeInformation}
 import org.apache.flink.api.java.typeutils.TypeExtractor
-import org.apache.flink.table.api.{DataTypes, TableException}
+import org.apache.flink.table.api.{DataTypes, TableException, TableSchema}
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory.toLogicalType
 import org.apache.flink.table.planner.plan.schema.{GenericRelDataType, _}
+import org.apache.flink.table.runtime.types.LogicalTypeDataTypeConverter
+import org.apache.flink.table.types.DataType
 import org.apache.flink.table.types.logical._
 import org.apache.flink.table.typeutils.TimeIndicatorTypeInfo
 import org.apache.flink.types.Nothing
 import org.apache.flink.util.Preconditions.checkArgument
-
 import org.apache.calcite.avatica.util.TimeUnit
 import org.apache.calcite.jdbc.JavaTypeFactoryImpl
 import org.apache.calcite.rel.RelNode
@@ -37,9 +38,11 @@ import org.apache.calcite.sql.`type`.SqlTypeName._
 import org.apache.calcite.sql.`type`.{BasicSqlType, MapSqlType, SqlTypeName}
 import org.apache.calcite.sql.parser.SqlParserPos
 import org.apache.calcite.util.ConversionUtil
-
 import java.nio.charset.Charset
 import java.util
+import java.util.Optional
+
+import org.apache.flink.table.catalog.{DataTypeLookup, UnresolvedIdentifier}
 
 import scala.collection.JavaConversions._
 import scala.collection.JavaConverters._
@@ -52,6 +55,17 @@ import scala.collection.mutable
 class FlinkTypeFactory(typeSystem: RelDataTypeSystem) extends JavaTypeFactoryImpl(typeSystem) {
 
   private val seenTypes = mutable.HashMap[LogicalType, RelDataType]()
+
+  def getDataTypeLookup: DataTypeLookup = new DataTypeLookup {
+    override def lookupDataType(name: String): Optional[DataType] =
+      throw new UnsupportedOperationException("Looking up a data type is not supported yet.")
+
+    override def lookupDataType(identifier: UnresolvedIdentifier): Optional[DataType] =
+      throw new UnsupportedOperationException("Looking up a data type is not supported yet.")
+
+    override def resolveRawDataType(clazz: Class[_]): DataType =
+      throw new UnsupportedOperationException("Looking up a data type is not supported yet.")
+  }
 
   /**
     * Create a calcite field type in table schema from [[LogicalType]]. It use
@@ -76,7 +90,8 @@ class FlinkTypeFactory(typeSystem: RelDataTypeSystem) extends JavaTypeFactoryImp
       case LogicalTypeRoot.DATE => createSqlType(DATE)
       case LogicalTypeRoot.TIME_WITHOUT_TIME_ZONE => createSqlType(TIME)
       case LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE =>
-        createSqlType(TIMESTAMP_WITH_LOCAL_TIME_ZONE)
+        val lzTs = t.asInstanceOf[LocalZonedTimestampType]
+        createSqlType(TIMESTAMP_WITH_LOCAL_TIME_ZONE, lzTs.getPrecision)
 
       // interval types
       case LogicalTypeRoot.INTERVAL_YEAR_MONTH =>
@@ -133,7 +148,7 @@ class FlinkTypeFactory(typeSystem: RelDataTypeSystem) extends JavaTypeFactoryImp
         timestampType.getKind match {
           case TimestampKind.PROCTIME => createProctimeIndicatorType(true)
           case TimestampKind.ROWTIME => createRowtimeIndicatorType(true)
-          case TimestampKind.REGULAR => createSqlType(TIMESTAMP)
+          case TimestampKind.REGULAR => createSqlType(TIMESTAMP, timestampType.getPrecision)
         }
       case _ =>
         seenTypes.get(t) match {
@@ -170,6 +185,18 @@ class FlinkTypeFactory(typeSystem: RelDataTypeSystem) extends JavaTypeFactoryImp
       originalType.asInstanceOf[BasicSqlType],
       isNullable,
       isEventTime = true))
+  }
+
+  /**
+    * Creates a struct type with the input fieldNames and input fieldTypes using FlinkTypeFactory
+    *
+    * @param tableSchema schema to convert to Calcite's specific one
+    * @return a struct type with the input fieldNames, input fieldTypes, and system fields
+    */
+  def buildRelNodeRowType(tableSchema: TableSchema): RelDataType = {
+    buildRelNodeRowType(
+      tableSchema.getFieldNames,
+      tableSchema.getFieldDataTypes.map(_.getLogicalType))
   }
 
   /**
@@ -424,18 +451,9 @@ object FlinkTypeFactory {
         // blink runner support precision 3, but for consistent with flink runner, we set to 0.
         new TimeType()
       case TIMESTAMP =>
-        if (relDataType.getPrecision > 3) {
-          throw new TableException(
-            s"TIMESTAMP precision is not supported: ${relDataType.getPrecision}")
-        }
-        new TimestampType(3)
+        new TimestampType(relDataType.getPrecision)
       case TIMESTAMP_WITH_LOCAL_TIME_ZONE =>
-        if (relDataType.getPrecision > 3) {
-          throw new TableException(
-            s"TIMESTAMP_WITH_LOCAL_TIME_ZONE precision is not supported:" +
-                s" ${relDataType.getPrecision}")
-        }
-        new LocalZonedTimestampType(3)
+        new LocalZonedTimestampType(relDataType.getPrecision)
       case typeName if YEAR_INTERVAL_TYPES.contains(typeName) =>
         DataTypes.INTERVAL(DataTypes.MONTH).getLogicalType
       case typeName if DAY_INTERVAL_TYPES.contains(typeName) =>
@@ -479,6 +497,17 @@ object FlinkTypeFactory {
         throw new TableException(s"Type is not supported: $t")
     }
     logicalType.copy(relDataType.isNullable)
+  }
+
+  def toTableSchema(relDataType: RelDataType): TableSchema = {
+    val fieldNames = relDataType.getFieldNames.toArray(new Array[String](0))
+    val fieldTypes = relDataType.getFieldList
+      .asScala
+      .map(field =>
+        LogicalTypeDataTypeConverter.fromLogicalTypeToDataType(
+          FlinkTypeFactory.toLogicalType(field.getType))
+      ).toArray
+    TableSchema.builder.fields(fieldNames, fieldTypes).build
   }
 
   def toLogicalRowType(relType: RelDataType): RowType = {
